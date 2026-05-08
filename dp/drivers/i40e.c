@@ -346,9 +346,7 @@ static int i40e_rx_poll(struct eth_rx_queue *rx)
 	int nb_descs = 0;
 	bool valid_checksum;
 	int local_fg_id;
-	long timestamp;
-
-	timestamp = rdtsc();
+	
 	while (1) {
 		rxdp = &((volatile union i40e_rx_desc *)rxq->ring)[rxq->head & (rxq->len - 1)];
 		qword1 = rte_le_to_cpu_64(rxdp->wb.qword1.status_error_len);
@@ -385,7 +383,7 @@ static int i40e_rx_poll(struct eth_rx_queue *rx)
 			local_fg_id = (le32_to_cpu(rxd.wb.qword0.hi_dword.rss) & (rx->dev->data->nb_rx_fgs - 1));
 			b->fg_id = rx->dev->data->rx_fgs[local_fg_id].fg_id;
 		}
-		b->timestamp = timestamp;
+		b->timestamp = rdtsc();
 
 		new_b = mbuf_alloc_local();
 		if (unlikely(!new_b)) {

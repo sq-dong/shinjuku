@@ -246,7 +246,7 @@ rte_eth_dev_init(struct rte_pci_driver *pci_drv,
 	struct eth_driver    *eth_drv;
 	struct rte_eth_dev *eth_dev;
 	char ethdev_name[RTE_ETH_NAME_MAX_LEN];
-
+	
 	int diag;
 
 	eth_drv = (struct eth_driver *)pci_drv;

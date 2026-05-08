@@ -83,6 +83,7 @@ struct mbuf {
 	void (*done)(struct mbuf *m);  /* called on free */
 	unsigned long done_data; /* extra data to pass to done() */
 	unsigned long timestamp; /* receive timestamp (in CPU clock ticks) */
+	unsigned long networker_cy; /* networker batch processing time (cycles) */
 };
 
 #define MBUF_HEADER_LEN		64	/* one cache line */

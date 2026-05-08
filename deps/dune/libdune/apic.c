@@ -100,7 +100,7 @@ static inline void __xapic_wait_icr_idle(void)
 
 static inline void __default_send_IPI_dest_field(unsigned int mask, int vector, unsigned int dest)
 {
-	__xapic_wait_icr_idle();
+	//__xapic_wait_icr_idle();
 	apic_write(APIC_ICR2, __prepare_ICR2(mask));
 	apic_write(APIC_ICR, __prepare_ICR(0, vector, dest));
 }

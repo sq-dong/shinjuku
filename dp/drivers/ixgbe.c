@@ -295,9 +295,7 @@ static int ixgbe_rx_poll(struct eth_rx_queue *rx)
 	int nb_descs = 0;
 	bool valid_checksum;
 	int local_fg_id;
-	long timestamp;
-
-	timestamp = rdtsc();
+	
 	while (1) {
 		rxdp = &rxq->ring[rxq->head & (rxq->len - 1)];
 		status = le32_to_cpu(rxdp->wb.upper.status_error);
@@ -333,7 +331,7 @@ static int ixgbe_rx_poll(struct eth_rx_queue *rx)
 				       (rx->dev->data->nb_rx_fgs - 1));
 			b->fg_id = rx->dev->data->rx_fgs[local_fg_id].fg_id;
 		}
-		b->timestamp = timestamp;
+		b->timestamp = rdtsc();
 
 		new_b = mbuf_alloc_local();
 		if (unlikely(!new_b)) {

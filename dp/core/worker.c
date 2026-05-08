@@ -35,6 +35,8 @@
 #include <sched.h>
 #include <stdio.h>
 #include <time.h>
+#include <string.h>
+#include <signal.h>
 
 #include <sys/types.h>
 #include <sys/resource.h>
@@ -42,6 +44,7 @@
 #include <ix/cpu.h>
 #include <ix/log.h>
 #include <ix/mbuf.h>
+#include <ix/timer.h>
 #include <asm/cpu.h>
 #include <ix/context.h>
 #include <ix/dispatch.h>
@@ -59,6 +62,8 @@ __thread ucontext_t uctx_main;
 __thread ucontext_t * cont;
 __thread int cpu_nr_;
 __thread volatile uint8_t finished;
+__thread uint64_t tls_networker_cy;
+__thread uint64_t tls_dispatcher_cy;
 
 DEFINE_PERCPU(struct mempool, response_pool __attribute__((aligned(64))));
 
@@ -69,15 +74,46 @@ extern int swapcontext_very_fast(ucontext_t *ouctx, ucontext_t *uctx);
 extern void dune_apic_eoi();
 extern int dune_register_intr_handler(int vector, dune_intr_cb cb);
 
+struct request {
+        uint64_t runNs;           
+        uint64_t genNs;       
+} __attribute__((packed));
+
 struct response {
         uint64_t runNs;
         uint64_t genNs;
-};
+        uint64_t networker_recv_ns;
+        uint64_t server_send_ns;
+        uint64_t networker_cy;    
+        uint64_t dispatcher_cy;   
+} __attribute__((packed));
 
-struct request {
-        uint64_t runNs;
-        uint64_t genNs;
-};
+static volatile uint64_t total_responses_sent = 0;
+static uint64_t tsc_hz = 2799980000ULL;
+
+/**
+  * convert TSC cycles to nanoseconds
+  */
+static inline uint64_t cycles_to_ns(uint64_t cycles) {
+        return cycles * 1000000000ULL / tsc_hz;
+}
+
+/**
+  * signal handler - when Ctrl+C is pressed
+  */
+static void sigint_handler(int signum) {
+        printf("[worker] Total responses sent: %lu\n", total_responses_sent);
+        fflush(stdout);
+        _exit(0);
+}
+
+/**
+  * setup signal handler
+  */
+static void setup_signal_handler(void) {
+        signal(SIGINT, sigint_handler);
+        signal(SIGTERM, sigint_handler);
+}
 
 /**
  * response_init - allocates global response datastore
@@ -114,21 +150,24 @@ static void test_handler(struct dune_tf *tf)
  * @lsw: the bottom 32 bits of the pointer containing the data
  */
 static void generic_work(uint32_t msw, uint32_t lsw, uint32_t msw_id,
-                         uint32_t lsw_id)
+                         uint32_t lsw_id, uint32_t msw_ts, uint32_t lsw_ts)
 {
         asm volatile ("sti":::);
 
         struct ip_tuple * id = (struct ip_tuple *) ((uint64_t) msw_id << 32 | lsw_id);
         void * data = (void *)((uint64_t) msw << 32 | lsw);
+        uint64_t networker_recv_cycles = ((uint64_t) msw_ts << 32) | lsw_ts;
         int ret;
 
         struct request * req = (struct request *) data;
 
+        uint64_t workload_start_cycles = rdtsc();
         uint64_t i = 0;
         do {
                 asm volatile ("nop");
                 i++;
-        } while ( i / 0.233 < req->runNs);
+        } while ( i * 0.9 < req->runNs);
+        uint64_t workload_end_cycles = rdtsc();
 
         asm volatile ("cli":::);
         struct response * resp = mempool_alloc(&percpu_get(response_pool));
@@ -140,6 +179,11 @@ static void generic_work(uint32_t msw, uint32_t lsw, uint32_t msw_id,
 
         resp->genNs = req->genNs;
         resp->runNs = req->runNs;
+        resp->networker_recv_ns = networker_recv_cycles;
+        resp->networker_cy = tls_networker_cy;
+        resp->dispatcher_cy = tls_dispatcher_cy;
+        unsigned int _dummy;
+        resp->server_send_ns = rdtscp(&_dummy);
         struct ip_tuple new_id = {
                 .src_ip = id->dst_ip,
                 .dst_ip = id->src_ip,
@@ -149,15 +193,18 @@ static void generic_work(uint32_t msw, uint32_t lsw, uint32_t msw_id,
 
         ret = udp_send((void *)resp, sizeof(struct response), &new_id,
                        (uint64_t) resp);
-        if (ret)
+        if (!ret) {
+                __sync_fetch_and_add(&total_responses_sent, 1);
+        } else {
                 log_warn("udp_send failed with error %d\n", ret);
+        }
 
         finished = true;
         swapcontext_very_fast(cont, &uctx_main);
 }
 
 static inline void parse_packet(struct mbuf * pkt, void ** data_ptr,
-                                struct ip_tuple ** id_ptr)
+                                struct ip_tuple ** id_ptr, uint64_t *recv_cycles)
 {
         // Quickly parse packet without doing checks
         struct eth_hdr * ethhdr = mbuf_mtod(pkt, struct eth_hdr *);
@@ -180,6 +227,7 @@ static inline void parse_packet(struct mbuf * pkt, void ** data_ptr,
         (*id_ptr)->dst_ip = ntoh32(iphdr->dst_addr.addr);
         (*id_ptr)->src_port = ntoh16(udphdr->src_port);
         (*id_ptr)->dst_port = ntoh16(udphdr->dst_port);
+        *recv_cycles = pkt->timestamp;
         pkt->done = (void *) 0xDEADBEEF;
 }
 
@@ -197,18 +245,23 @@ static inline void handle_new_packet(void)
         int ret;
         void * data;
         struct ip_tuple * id;
+        uint64_t recv_cycles;
         struct mbuf * pkt = (struct mbuf *) dispatcher_requests[cpu_nr_].mbuf;
-        parse_packet(pkt, &data, &id);
+        parse_packet(pkt, &data, &id, &recv_cycles);
+        tls_networker_cy = pkt->networker_cy;
+        tls_dispatcher_cy = dispatcher_requests[cpu_nr_].dispatcher_cy;
         if (data) {
                 uint32_t msw = ((uint64_t) data & 0xFFFFFFFF00000000) >> 32;
                 uint32_t lsw = (uint64_t) data & 0x00000000FFFFFFFF;
                 uint32_t msw_id = ((uint64_t) id & 0xFFFFFFFF00000000) >> 32;
                 uint32_t lsw_id = (uint64_t) id & 0x00000000FFFFFFFF;
+                uint32_t msw_ts = (recv_cycles & 0xFFFFFFFF00000000) >> 32;
+                uint32_t lsw_ts = recv_cycles & 0x00000000FFFFFFFF;
                 cont = dispatcher_requests[cpu_nr_].rnbl;
                 getcontext_fast(cont);
                 set_context_link(cont, &uctx_main);
-                makecontext(cont, (void (*)(void)) generic_work, 4, msw, lsw,
-                            msw_id, lsw_id);
+                makecontext(cont, (void (*)(void)) generic_work, 6, msw, lsw,
+                            msw_id, lsw_id, msw_ts, lsw_ts);
                 finished = false;
                 ret = swapcontext_very_fast(&uctx_main, cont);
                 if (ret) {
@@ -224,6 +277,9 @@ static inline void handle_new_packet(void)
 static inline void handle_context(void)
 {
         int ret;
+        struct mbuf * pkt = (struct mbuf *) dispatcher_requests[cpu_nr_].mbuf;
+        tls_networker_cy = pkt ? pkt->networker_cy : 0;
+        tls_dispatcher_cy = dispatcher_requests[cpu_nr_].dispatcher_cy;
         finished = false;
         cont = dispatcher_requests[cpu_nr_].rnbl;
         set_context_link(cont, &uctx_main);
@@ -263,6 +319,7 @@ static inline void finish_request(void)
 
 void do_work(void)
 {
+        setup_signal_handler();
         init_worker();
         log_info("do_work: Waiting for dispatcher work\n");
 

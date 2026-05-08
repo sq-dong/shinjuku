@@ -36,6 +36,7 @@
 #include <ix/ethqueue.h>
 #include <ix/transmit.h>
 
+#include <asm/cpu.h>
 #include <asm/chksum.h>
 
 #include <net/ip.h>
@@ -49,6 +50,7 @@ void do_networking(void)
 {
         int i, num_recv;
         while(1) {
+                uint64_t _t1 = rdtsc();
                 eth_process_poll();
                 num_recv = eth_process_recv();
                 if (num_recv == 0)
@@ -58,7 +60,9 @@ void do_networking(void)
                         mbuf_free(networker_pointers.pkts[i]);
                 }
                 networker_pointers.free_cnt = 0;
+                uint64_t networker_cy = rdtsc() - _t1;
                 for (i = 0; i < num_recv; i++) {
+                        recv_mbufs[i]->networker_cy = networker_cy;
                         networker_pointers.pkts[i] = recv_mbufs[i];
                         networker_pointers.types[i] = (uint8_t) recv_type[i];
                 }

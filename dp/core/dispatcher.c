@@ -91,6 +91,7 @@ static inline void dispatch_request(int i, uint64_t cur_time)
         dispatcher_requests[i].type = type;
         dispatcher_requests[i].category = category;
         dispatcher_requests[i].timestamp = timestamp;
+        dispatcher_requests[i].dispatcher_cy = (category == PACKET) ? (cur_time - timestamp) : 0;
         timestamps[i] = cur_time;
         preempt_check[i] = true;
         dispatcher_requests[i].flag = ACTIVE;
@@ -98,7 +99,7 @@ static inline void dispatch_request(int i, uint64_t cur_time)
 
 static inline void preempt_worker(int i, uint64_t cur_time)
 {
-        if (preempt_check[i] && (((cur_time - timestamps[i]) / 2.5) > PREEMPTION_DELAY)) {
+        if (preempt_check[i] && (((cur_time - timestamps[i]) / 2.79998) > PREEMPTION_DELAY)) {
                 // Avoid preempting more times.
                 preempt_check[i] = false;
                 dune_apic_send_posted_ipi(PREEMPT_VECTOR, CFG.cpu[i + 2]);

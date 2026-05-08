@@ -9,3 +9,7 @@
 /dp/shinjuku
 /client/latency_client
 /client/batch_client
+
+/deps/dpdk/build/
+/deps/dune/kern/.cache.mk
+/deps/dune/kern/*.o.ur-*

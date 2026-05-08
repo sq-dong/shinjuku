@@ -2,4 +2,4 @@
 
 make clean
 make -sj64
-./dp/shinjuku
+sudo ./dp/shinjuku

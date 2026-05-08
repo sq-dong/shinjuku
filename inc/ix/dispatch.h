@@ -28,7 +28,7 @@
 #include <ix/mempool.h>
 #include <ix/ethqueue.h>
 
-#define MAX_WORKERS   18
+#define MAX_WORKERS   24
 
 #define WAITING     0x00
 #define ACTIVE      0x01
@@ -68,7 +68,8 @@ struct dispatcher_request
         uint8_t type;
         uint8_t category;
         uint64_t timestamp;
-        char make_it_64_bytes[30];
+        uint64_t dispatcher_cy;
+        char make_it_64_bytes[22];
 } __attribute__((packed, aligned(64)));
 
 struct networker_pointers_t
